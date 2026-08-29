@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>교회 매일 기도 챌린지 🙏</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getFirestore, doc, setDoc, getDoc, collection, query, orderBy, limit, onSnapshot, addDoc, serverTimestamp } 
+      from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+    import { getStorage, ref, uploadBytes, getDownloadURL } 
+      from "https://www.gstatic.com/firebasejs/10.8.0/firebase-storage.js";
+
+    // 연동된 Firebase 설정
+    const firebaseConfig = {
+      apiKey: "AIzaSyA7O42ev9D6H8PzLMO6qzR1PeSHXM3JDI8",
+      authDomain: "math-lover-d4916.firebaseapp.com",
+      projectId: "math-lover-d4916",
+      storageBucket: "math-lover-d4916.firebasestorage.app",
+      messagingSenderId: "343871778182",
+      appId: "1:343871778182:web:a69711224013c9c454d007"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const storage = getStorage(app);
+
+    // 1. 기도 기록 제출 함수
+    window.submitPrayer = async function() {
+      const name = document.getElementById("userName").value.trim();
+      const minutesInput = document.getElementById("prayerMinutes").value.trim();
+      const memo = document.getElementById("prayerMemo").value.trim();
+      const imageFile = document.getElementById("prayerImage").files[0];
+      const resultDiv = document.getElementById("resultMessage");
+      const submitBtn = document.getElementById("submitBtn");
+
+      const minutes = parseInt(minutesInput);
+
+      if (!name || isNaN(minutes) || minutes <= 0) {
+        alert("이름과 기도 시간을 올바르게 입력해주세요!");
+        return;
+      }
+
+      submitBtn.innerText = "기도 기록 및 사진 저장 중... ⏳";
+      submitBtn.disabled = true;
+      submitBtn.classList.add("opacity-50");
+
+      try {
+        let uploadedImageUrl = null;
+
+        // 이미지 파일이 있는 경우 Firebase Storage 업로드
+        if (imageFile) {
+          const imageRef = ref(storage, `church_prayers/${Date.now()}_${name}`);
+          await uploadBytes(imageRef, imageFile);
+          uploadedImageUrl = await getDownloadURL(imageRef);
+        }
+
+        // 점수 계산 (기도 1분당 10점 + 사진 첨부 보너스 50점)
+        const photoBonus = uploadedImageUrl ? 50 : 0;
+        const earnedScore = (minutes * 10) + photoBonus;
+
+        // A. 개인 누적 점수 및 기도시간 업데이트 (랭킹용)
+        const userRef = doc(db, "church_rankings", name);
+        const userSnap = await getDoc(userRef);
+
+        let currentTotalMinutes = 0;
+        let currentTotalScore = 0;
+
+        if (userSnap.exists()) {
+          const data = userSnap.data();
+          currentTotalMinutes = data.totalMinutes || 0;
+          currentTotalScore = data.totalScore || 0;
+        }
+
+        await setDoc(userRef, {
+          name: name,
+          totalMinutes: currentTotalMinutes + minutes,
+          totalScore: currentTotalScore + earnedScore,
+          lastUpdated: serverTimestamp()
+        }, { merge: true });
+
+        // B. 공유 피드 기록 추가 (다같이 보는 기도일지)
+        await addDoc(collection(db, "church_posts"), {
+          name: name,
+          minutes: minutes,
+          memo: memo || "오늘도 기도로 승리합니다! 🙏",
+          imageUrl: uploadedImageUrl,
+          earnedScore: earnedScore,
+          createdAt: serverTimestamp()
+        });
+
+        resultDiv.innerHTML = `<p class='text-emerald-600 font-bold bg-emerald-50 p-3 rounded-lg text-center'>
+          🎉 ${minutes}분 기도 완료! +${earnedScore}점 획득!<br>
+          <span class='text-xs font-normal text-emerald-800'>(기도 1분당 10점 ${photoBonus > 0 ? '+ 📸 사진 보너스 50점' : ''})</span>
+        </p>`;
+
+        // 입력창 초기화
+        document.getElementById("prayerMinutes").value = "";
+        document.getElementById("prayerMemo").value = "";
+        document.getElementById("prayerImage").value = "";
+
+      } catch (error) {
+        console.error(error);
+        resultDiv.innerHTML = "<p class='text-red-500 font-bold bg-red-50 p-3 rounded-lg text-center'>저장 중 오류가 발생했습니다.</p>";
+      } finally {
+        submitBtn.innerText = "기도 시간 제출하고 랭킹 올리기 🙏";
+        submitBtn.disabled = false;
+        submitBtn.classList.remove("opacity-50");
+      }
+    };
+
+    // 2. 실시간 기도 랭킹 불러오기
+    const rankingQuery = query(collection(db, "church_rankings"), orderBy("totalScore", "desc"), limit(10));
+    onSnapshot(rankingQuery, (snapshot) => {
+      const leaderboard = document.getElementById("leaderboard");
+      leaderboard.innerHTML = "";
+      
+      let rank = 1;
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        const row = `
+          <tr class="border-b hover:bg-emerald-50/50 transition-colors">
+            <td class="p-3 font-bold ${rank === 1 ? 'text-amber-500' : 'text-slate-600'}">${rank}위</td>
+            <td class="p-3 font-semibold text-slate-800">${data.name}</td>
+            <td class="p-3 font-bold text-emerald-600">${data.totalMinutes}분</td>
+            <td class="p-3 text-slate-500 font-medium">${data.totalScore}점</td>
+          </tr>
+        `;
+        leaderboard.innerHTML += row;
+        rank++;
+      });
+
+      if (snapshot.empty) {
+        leaderboard.innerHTML = "<tr><td colspan='4' class='p-6 text-center text-slate-400'>첫 번째 기도를 등록해 보세요!</td></tr>";
+      }
+    });
+
+    // 3. 실시간 기도 피드/갤러리 불러오기 (모든 사람이 공유하는 이미지)
+    const feedQuery = query(collection(db, "church_posts"), orderBy("createdAt", "desc"), limit(12));
+    onSnapshot(feedQuery, (snapshot) => {
+      const feed = document.getElementById("prayerFeed");
+      feed.innerHTML = "";
+
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        const card = `
+          <div class="bg-white rounded-xl p-4 shadow-sm border border-slate-200 flex flex-col justify-between">
+            <div>
+              <div class="flex justify-between items-center mb-2">
+                <span class="font-bold text-slate-800 text-sm">👤 ${data.name}</span>
+                <span class="text-xs bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded-full">🙏 ${data.minutes}분 기도</span>
+              </div>
+              ${data.imageUrl ? `<img src="${data.imageUrl}" alt="기도 인증 사진" class="w-full h-48 object-cover rounded-lg mb-3 border border-slate-100 cursor-pointer" onclick="window.open('${data.imageUrl}')">` : ''}
+              <p class="text-slate-600 text-xs leading-relaxed bg-slate-50 p-2.5 rounded-lg border border-slate-100">${data.memo}</p>
+            </div>
+          </div>
+        `;
+        feed.innerHTML += card;
+      });
+
+      if (snapshot.empty) {
+        feed.innerHTML = "<p class='col-span-full text-center text-slate-400 py-8'>아직 올려진 기도 나눔이 없습니다.</p>";
+      }
+    });
+  </script>
+</head>
+<body class="bg-emerald-50/40 min-h-screen p-4 md:p-8 font-sans pb-16">
+  <header class="max-w-5xl mx-auto mb-8 text-center">
+    <h1 class="text-3xl font-extrabold text-slate-800">교회 매일 기도 챌린지 🙏</h1>
+    <p class="text-xs text-slate-500 mt-2">기도로 마음을 모으고 함께 기쁨을 나눠요!</p>
+  </header>
+
+  <div class="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6">
+    <!-- 1열: 기도 제출 폼 -->
+    <div class="bg-white rounded-2xl p-6 shadow-md border border-slate-200 h-fit">
+      <h2 class="text-base font-bold text-slate-800 mb-4 flex items-center gap-1.5">
+        <span>✍️</span> 오늘 기도 기록하기
+      </h2>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">성함 / 청년명</label>
+          <input type="text" id="userName" placeholder="예: 김기도 성도" class="w-full p-2.5 bg-slate-50 border rounded-lg text-sm focus:outline-none focus:border-emerald-500">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">오늘 기도한 시간 (분 단위)</label>
+          <input type="number" id="prayerMinutes" placeholder="예: 30" class="w-full p-2.5 bg-slate-50 border rounded-lg text-sm focus:outline-none focus:border-emerald-500">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">오늘의 한 줄 기도제목/소감 (선택)</label>
+          <textarea id="prayerMemo" placeholder="은혜받은 말씀이나 기도제목을 나눠주세요." class="w-full p-2.5 bg-slate-50 border rounded-lg text-sm h-20 resize-none focus:outline-none focus:border-emerald-500"></textarea>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">📸 이미지/사진 첨부 (+50점 보너스)</label>
+          <input type="file" id="prayerImage" accept="image/*" class="w-full text-slate-500 text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100">
+        </div>
+
+        <button id="submitBtn" onclick="submitPrayer()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold p-3 rounded-lg text-sm transition-all shadow-sm">
+          기도 시간 제출하고 랭킹 올리기 🙏
+        </button>
+
+        <div id="resultMessage" class="text-xs"></div>
+      </div>
+    </div>
+
+    <!-- 2열: 누적 기도 랭킹 -->
+    <div class="bg-white rounded-2xl p-6 shadow-md border border-slate-200 h-fit">
+      <h2 class="text-base font-bold text-slate-800 mb-4 flex items-center gap-1.5">
+        <span>🏆</span> 명예의 전당 (누적 랭킹)
+      </h2>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-50 text-slate-500 border-b">
+            <tr>
+              <th class="p-2.5">순위</th>
+              <th class="p-2.5">이름</th>
+              <th class="p-2.5">총 시간</th>
+              <th class="p-2.5">점수</th>
+            </tr>
+          </thead>
+          <tbody id="leaderboard">
+            <tr><td colspan="4" class="p-6 text-center text-slate-400">불러오는 중...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 3열 & 피드: 다같이 보는 실시간 기도 피드 -->
+    <div class="md:col-span-3 mt-4">
+      <h2 class="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+        <span>📖</span> 성도님들의 실시간 기도 나눔
+      </h2>
+      <div id="prayerFeed" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+        <p class="col-span-full text-center text-slate-400 py-8">불러오는 중...</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
