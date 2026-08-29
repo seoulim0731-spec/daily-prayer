@@ -128,7 +128,7 @@
         // B. 공유 피드 기록 추가 (다같이 보는 기도일지)
         await addDoc(collection(db, "church_posts"), {
           name: name,
-          memo: memo || "오늘도 기도로 승리합니다! 🙏",
+          memo: memo || "다같이 아니모! 🙏",
           imageUrl: uploadedImageUrl,
           createdAt: serverTimestamp()
         });
